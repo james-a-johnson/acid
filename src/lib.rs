@@ -80,6 +80,40 @@ impl<T> Graph<T> {
         let sg = SafeGraph::new(&mut self.nodes);
         changes(sg);
     }
+
+    /// Add a new node to the graph.
+    ///
+    /// Returns the id that can be used to reference the added node.
+    pub fn add(&mut self, val: T) -> usize {
+        let id = self.nodes.len();
+        self.nodes.push(val.into());
+        id
+    }
+
+    /// Create a new edge between two nodes.
+    ///
+    /// Uses `start` as the start node of the edge and `end` as the end node of the edge.
+    ///
+    /// # Errors
+    /// If either `start` or `end` is invalid, it will return the id that was invalid as the error.
+    /// Checks `start` then `end`.
+    pub fn create_edge(&mut self, start: usize, end: usize) -> Result<(), usize> {
+        // Need to check both indexes first to make sure they are valid. Otherwise an invalid edge could be
+        // added to the graph.
+        if start >= self.nodes.len() {
+            return Err(start);
+        }
+        if end >= self.nodes.len() {
+            return Err(end);
+        }
+        if let Some(n) = self.nodes.get_mut(start) {
+            n.exit.push(end);
+        }
+        if let Some(n) = self.nodes.get_mut(end) {
+            n.entry.push(start);
+        }
+        Ok(())
+    }
 }
 
 impl<T> Node<T> {
@@ -243,6 +277,20 @@ mod test {
         assert_eq!(*entry.val(), 0);
         assert_eq!(entry.exit_nodes(), &[]);
         assert_eq!(entry.entry_nodes(), &[]);
+    }
+
+    #[test]
+    fn modify() {
+        let mut g = Graph::new(0u32);
+        let one = g.add(1);
+        let two = g.add(2);
+        g.create_edge(0, one).expect("Failed to create valid edge");
+        g.create_edge(0, two).expect("Failed to create valid edge");
+
+        let e1 = g.create_edge(100, two);
+        assert_eq!(e1, Err(100));
+        let e2 = g.create_edge(two, 102);
+        assert_eq!(e2, Err(102));
     }
 
     #[test]
