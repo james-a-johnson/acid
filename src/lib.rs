@@ -1,4 +1,12 @@
+#![deny(clippy::perf)]
+#![deny(clippy::style)]
+#![deny(clippy::missing_errors_doc)]
+#![deny(clippy::missing_safety_doc)]
+#![deny(clippy::missing_panics_doc)]
+
 //! Simple graph library
+
+use std::marker::PhantomData;
 
 /// Directed graph where each node holds a `T`.
 pub struct Graph<T> {
@@ -63,6 +71,15 @@ impl<T> Graph<T> {
     pub fn get_mut(&mut self, id: usize) -> Option<&mut Node<T>> {
         self.nodes.get_mut(id)
     }
+
+    /// Update nodes in the graph.
+    pub fn update<'g, U>(&'g mut self, changes: U)
+    where
+        U: for<'id> FnOnce(SafeGraph<'id, 'g, T>),
+    {
+        let sg = SafeGraph::new(&mut self.nodes);
+        changes(sg);
+    }
 }
 
 impl<T> Node<T> {
@@ -97,4 +114,166 @@ impl<T> AsMut<T> for Node<T> {
     fn as_mut(&mut self) -> &mut T {
         &mut self.val
     }
+}
+
+type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
+
+/// Graph that allows for completely safe and unchecked accesses to nodes via an [`Id`].
+pub struct SafeGraph<'id, 'g, T> {
+    nodes: &'g mut Vec<Node<T>>,
+    _brand: Brand<'id>,
+}
+
+/// Id of a node tied to a specific graph.
+///
+/// Using it as an index into a graph is guaranteed to be a safe unchecked access if using it
+/// compiles.
+#[derive(Clone, Copy)]
+pub struct Id<'id> {
+    idx: usize,
+    _brand: Brand<'id>,
+}
+
+const _: () = assert!(
+    std::mem::align_of::<usize>() == std::mem::align_of::<Id<'_>>(),
+    "Id alignment differs from usize"
+);
+const _: () = assert!(
+    std::mem::size_of::<usize>() == std::mem::size_of::<Id<'_>>(),
+    "Id size differs from usize"
+);
+
+impl<'id> Id<'id> {
+    /// Create a new id for a specific index.
+    ///
+    /// This should not be used by anyone outside of this crate so it is not fully public. It
+    /// doesn't make sense for anything outside of this crate to make one of these ids even though
+    /// it is safe to do so.
+    pub(crate) fn new(idx: usize) -> Self {
+        Self {
+            idx,
+            _brand: PhantomData,
+        }
+    }
+
+    /// Get the id of the node this is referencing.
+    ///
+    /// The returned id is usable to get the same node from the corresponding [`Graph`].
+    pub fn id(&self) -> usize {
+        self.idx
+    }
+}
+
+impl<'id, 'g, T> SafeGraph<'id, 'g, T> {
+    /// Create a new SafeGraph from a Vec of Nodes.
+    ///
+    /// This is not public because it assumes that the Vec of Nodes will always have at least one element in it.
+    /// That will be guaranteed when this constructor is called from this module but can't be guaranteed if a user
+    /// calls this method.
+    pub(crate) fn new(nodes: &'g mut Vec<Node<T>>) -> Self {
+        debug_assert!(
+            !nodes.is_empty(),
+            "Safe graph constructor with empty vector"
+        );
+        Self {
+            nodes,
+            _brand: PhantomData,
+        }
+    }
+
+    /// Get the id of the entry node of the graph.
+    #[inline]
+    pub fn entry(&self) -> Id<'id> {
+        // SAFETY: See the safety comment for Graph::entry
+        Id::new(0)
+    }
+
+    /// Get a reference to a specific element in the graph.
+    #[inline]
+    pub fn get(&self, id: Id<'id>) -> &Node<T> {
+        // SAFETY: An Id is only created with valid indexes into a graph. Nodes cannot be removed from the
+        // graph so the index can never become invalid. Additionally, the brand of the Node will tie it to
+        // a specific instantiation of a SafeGraph so the specific index will be valid for this specific
+        // instantiation of the graph.
+        unsafe { self.nodes.get_unchecked(id.idx) }
+    }
+
+    /// Get a mutable reference to a specific element in the graph.
+    #[inline]
+    pub fn get_mut(&mut self, id: Id<'id>) -> &mut Node<T> {
+        // SAFETY: See safety for `get`.
+        unsafe { self.nodes.get_unchecked_mut(id.idx) }
+    }
+
+    /// Add a new node to the graph.
+    ///
+    /// Returns the [`Id`] that can be used to reference the node that was just added.
+    pub fn add(&mut self, val: T) -> Id<'id> {
+        let index = self.nodes.len();
+        self.nodes.push(val.into());
+        Id::new(index)
+    }
+
+    /// Create a new edge in the graph from node `start` to node `end`.
+    pub fn create_edge(&mut self, start: Id<'id>, end: Id<'id>) {
+        self.get_mut(start).exit.push(end.idx);
+        self.get_mut(end).entry.push(start.idx);
+    }
+
+    /// Convert an id of a node into an [`Id`].
+    ///
+    /// Checks if the id is in this graph and returns the safe Id if possible or returns None otherwise.
+    pub fn safe_index(&mut self, idx: usize) -> Option<Id<'id>> {
+        if idx < self.nodes.len() {
+            Some(Id::new(idx))
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn min_graph() {
+        let g = Graph::new(0u32);
+        let entry = g.entry();
+        assert_eq!(*entry.val(), 0);
+        assert_eq!(entry.exit_nodes(), &[]);
+        assert_eq!(entry.entry_nodes(), &[]);
+    }
+
+    #[test]
+    fn update() {
+        let mut g = Graph::new(0u32);
+        g.update(|mut sg| {
+            let two = sg.add(2);
+            let three = sg.add(3);
+            let four = sg.add(4);
+            sg.create_edge(sg.entry(), two);
+            sg.create_edge(two, three);
+            sg.create_edge(three, four);
+
+            let invalid = sg.safe_index(1000);
+            assert!(invalid.is_none(), "Invalid index turned into an Id");
+        });
+        let vals = g.nodes.iter().map(|n| *n.val()).collect::<Vec<u32>>();
+        assert_eq!(vals.as_slice(), &[0, 2, 3, 4]);
+    }
+
+    // This test is included so that it can be uncommented every once in a while to make sure it does not
+    // compile. This guarantees the safety properties of Id not being able to be used with other safe graphs.
+    // #[test]
+    // fn compile_error() {
+    //     let mut g1 = Graph::new('a');
+    //     let mut g2 = Graph::new('b');
+    //     g1.update(|mut sg1| {
+    //         g2.update(|mut sg2| {
+    //             let entry2 = g2.entry();
+    //             let node = g1.get(entry2);
+    //         })
+    //     })
+    // }
 }
