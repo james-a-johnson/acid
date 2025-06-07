@@ -18,8 +18,19 @@ pub struct Graph<T> {
 /// Keeps track of the value in this node and all edges into or out of this node.
 pub struct Node<T> {
     val: T,
-    entry: Vec<usize>,
-    exit: Vec<usize>,
+    entry: Vec<Id>,
+    exit: Vec<Id>,
+}
+
+/// Reference to a specific node in a graph.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct Id(usize);
+
+impl From<SafeId<'_>> for Id {
+    fn from(id: SafeId) -> Self {
+        Id(id.idx)
+    }
 }
 
 impl<T> From<T> for Node<T> {
@@ -38,6 +49,11 @@ impl<T> Graph<T> {
         Self {
             nodes: vec![entry.into()],
         }
+    }
+    
+    /// Get the Id of the entry node.
+    pub fn entry_id(&self) -> Id {
+        Id(0)
     }
 
     /// Create a new graph with `entry` as the entry node of the graph and pre-allocate
@@ -63,13 +79,13 @@ impl<T> Graph<T> {
     }
 
     /// Get a reference to the node with id `id`.
-    pub fn get(&self, id: usize) -> Option<&Node<T>> {
-        self.nodes.get(id)
+    pub fn get(&self, id: Id) -> Option<&Node<T>> {
+        self.nodes.get(id.0)
     }
 
     /// Get a mutable reference to the node with id `id`.
-    pub fn get_mut(&mut self, id: usize) -> Option<&mut Node<T>> {
-        self.nodes.get_mut(id)
+    pub fn get_mut(&mut self, id: Id) -> Option<&mut Node<T>> {
+        self.nodes.get_mut(id.0)
     }
 
     /// Update nodes in the graph.
@@ -84,10 +100,10 @@ impl<T> Graph<T> {
     /// Add a new node to the graph.
     ///
     /// Returns the id that can be used to reference the added node.
-    pub fn add(&mut self, val: T) -> usize {
+    pub fn add(&mut self, val: T) -> Id {
         let id = self.nodes.len();
         self.nodes.push(val.into());
-        id
+        Id(id)
     }
 
     /// Create a new edge between two nodes.
@@ -97,19 +113,19 @@ impl<T> Graph<T> {
     /// # Errors
     /// If either `start` or `end` is invalid, it will return the id that was invalid as the error.
     /// Checks `start` then `end`.
-    pub fn create_edge(&mut self, start: usize, end: usize) -> Result<(), usize> {
-        // Need to check both indexes first to make sure they are valid. Otherwise an invalid edge could be
+    pub fn create_edge(&mut self, start: Id, end: Id) -> Result<(), Id> {
+        // Need to check both indexes first to make sure they are valid. Otherwise, an invalid edge could be
         // added to the graph.
-        if start >= self.nodes.len() {
+        if start.0 >= self.nodes.len() {
             return Err(start);
         }
-        if end >= self.nodes.len() {
+        if end.0 >= self.nodes.len() {
             return Err(end);
         }
-        if let Some(n) = self.nodes.get_mut(start) {
+        if let Some(n) = self.nodes.get_mut(start.0) {
             n.exit.push(end);
         }
-        if let Some(n) = self.nodes.get_mut(end) {
+        if let Some(n) = self.nodes.get_mut(end.0) {
             n.entry.push(start);
         }
         Ok(())
@@ -128,12 +144,12 @@ impl<T> Node<T> {
     }
 
     /// Get a list of the ids of the nodes that have an edge to this node
-    pub fn entry_nodes(&self) -> &[usize] {
+    pub fn entry_nodes(&self) -> &[Id] {
         self.entry.as_slice()
     }
 
     /// Get a list of the ids of the nodes that this node has an edge to
-    pub fn exit_nodes(&self) -> &[usize] {
+    pub fn exit_nodes(&self) -> &[Id] {
         self.exit.as_slice()
     }
 }
@@ -152,7 +168,7 @@ impl<T> AsMut<T> for Node<T> {
 
 type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
 
-/// Graph that allows for completely safe and unchecked accesses to nodes via an [`Id`].
+/// Graph that allows for completely safe and unchecked accesses to nodes via an [`SafeId`].
 pub struct SafeGraph<'id, 'g, T> {
     nodes: &'g mut Vec<Node<T>>,
     _brand: Brand<'id>,
@@ -163,21 +179,21 @@ pub struct SafeGraph<'id, 'g, T> {
 /// Using it as an index into a graph is guaranteed to be a safe unchecked access if using it
 /// compiles.
 #[derive(Clone, Copy)]
-pub struct Id<'id> {
+pub struct SafeId<'id> {
     idx: usize,
     _brand: Brand<'id>,
 }
 
 const _: () = assert!(
-    std::mem::align_of::<usize>() == std::mem::align_of::<Id<'_>>(),
+    std::mem::align_of::<usize>() == std::mem::align_of::<SafeId<'_>>(),
     "Id alignment differs from usize"
 );
 const _: () = assert!(
-    std::mem::size_of::<usize>() == std::mem::size_of::<Id<'_>>(),
+    std::mem::size_of::<usize>() == std::mem::size_of::<SafeId<'_>>(),
     "Id size differs from usize"
 );
 
-impl<'id> Id<'id> {
+impl<'id> SafeId<'id> {
     /// Create a new id for a specific index.
     ///
     /// This should not be used by anyone outside of this crate so it is not fully public. It
@@ -188,13 +204,6 @@ impl<'id> Id<'id> {
             idx,
             _brand: PhantomData,
         }
-    }
-
-    /// Get the id of the node this is referencing.
-    ///
-    /// The returned id is usable to get the same node from the corresponding [`Graph`].
-    pub fn id(&self) -> usize {
-        self.idx
     }
 }
 
@@ -217,14 +226,14 @@ impl<'id, 'g, T> SafeGraph<'id, 'g, T> {
 
     /// Get the id of the entry node of the graph.
     #[inline]
-    pub fn entry(&self) -> Id<'id> {
+    pub fn entry(&self) -> SafeId<'id> {
         // SAFETY: See the safety comment for Graph::entry
-        Id::new(0)
+        SafeId::new(0)
     }
 
     /// Get a reference to a specific element in the graph.
     #[inline]
-    pub fn get(&self, id: Id<'id>) -> &Node<T> {
+    pub fn get(&self, id: SafeId<'id>) -> &Node<T> {
         // SAFETY: An Id is only created with valid indexes into a graph. Nodes cannot be removed from the
         // graph so the index can never become invalid. Additionally, the brand of the Node will tie it to
         // a specific instantiation of a SafeGraph so the specific index will be valid for this specific
@@ -234,32 +243,32 @@ impl<'id, 'g, T> SafeGraph<'id, 'g, T> {
 
     /// Get a mutable reference to a specific element in the graph.
     #[inline]
-    pub fn get_mut(&mut self, id: Id<'id>) -> &mut Node<T> {
+    pub fn get_mut(&mut self, id: SafeId<'id>) -> &mut Node<T> {
         // SAFETY: See safety for `get`.
         unsafe { self.nodes.get_unchecked_mut(id.idx) }
     }
 
     /// Add a new node to the graph.
     ///
-    /// Returns the [`Id`] that can be used to reference the node that was just added.
-    pub fn add(&mut self, val: T) -> Id<'id> {
+    /// Returns the [`SafeId`] that can be used to reference the node that was just added.
+    pub fn add(&mut self, val: T) -> SafeId<'id> {
         let index = self.nodes.len();
         self.nodes.push(val.into());
-        Id::new(index)
+        SafeId::new(index)
     }
 
     /// Create a new edge in the graph from node `start` to node `end`.
-    pub fn create_edge(&mut self, start: Id<'id>, end: Id<'id>) {
-        self.get_mut(start).exit.push(end.idx);
-        self.get_mut(end).entry.push(start.idx);
+    pub fn create_edge(&mut self, start: SafeId<'id>, end: SafeId<'id>) {
+        self.get_mut(start).exit.push(end.into());
+        self.get_mut(end).entry.push(start.into());
     }
 
-    /// Convert an id of a node into an [`Id`].
+    /// Convert an id of a node into an [`SafeId`].
     ///
     /// Checks if the id is in this graph and returns the safe Id if possible or returns None otherwise.
-    pub fn safe_index(&mut self, idx: usize) -> Option<Id<'id>> {
+    pub fn safe_index(&mut self, idx: usize) -> Option<SafeId<'id>> {
         if idx < self.nodes.len() {
-            Some(Id::new(idx))
+            Some(SafeId::new(idx))
         } else {
             None
         }
@@ -284,13 +293,13 @@ mod test {
         let mut g = Graph::new(0u32);
         let one = g.add(1);
         let two = g.add(2);
-        g.create_edge(0, one).expect("Failed to create valid edge");
-        g.create_edge(0, two).expect("Failed to create valid edge");
+        g.create_edge(g.entry_id(), one).expect("Failed to create valid edge");
+        g.create_edge(g.entry_id(), two).expect("Failed to create valid edge");
 
-        let e1 = g.create_edge(100, two);
-        assert_eq!(e1, Err(100));
-        let e2 = g.create_edge(two, 102);
-        assert_eq!(e2, Err(102));
+        let e1 = g.create_edge(Id(100), two);
+        assert_eq!(e1, Err(Id(100)));
+        let e2 = g.create_edge(two, Id(102));
+        assert_eq!(e2, Err(Id(102)));
     }
 
     #[test]
