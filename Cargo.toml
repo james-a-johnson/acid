@@ -4,3 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+
+[[bin]]
+name = "graph_viz"
+required-features = ["viz"]
+
+[features]
+viz = []

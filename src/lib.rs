@@ -24,8 +24,11 @@ pub struct Node<T> {
 
 /// Reference to a specific node in a graph.
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct Id(usize);
+
+const _: () = assert!(size_of::<Id>() == size_of::<usize>());
+const _: () = assert!(align_of::<Id>() == size_of::<usize>());
 
 impl From<SafeId<'_>> for Id {
     fn from(id: SafeId) -> Self {
@@ -132,6 +135,26 @@ impl<T> Graph<T> {
     }
 }
 
+#[cfg(feature = "viz")]
+impl<T: std::fmt::Display> Graph<T> {
+    pub fn dot_viz<W: std::io::Write>(&self, file: W, name: &str) -> std::io::Result<()> {
+        use std::io::BufWriter;
+        use std::io::Write;
+        
+        let mut writer = BufWriter::new(file);
+        
+        writeln!(writer, "digraph {} {{", name)?;
+        for n in self.nodes.iter() {
+            for succ in n.exit.iter() {
+                writeln!(writer, "\t{} -> {};", n.val, unsafe { &self.nodes.get_unchecked(succ.0).val })?;
+            }
+        }
+        writeln!(writer, "}}")?;
+        
+        Ok(())
+    }
+}
+
 impl<T> Node<T> {
     /// Get a reference to the value held in this node
     pub fn val(&self) -> &T {
@@ -185,11 +208,11 @@ pub struct SafeId<'id> {
 }
 
 const _: () = assert!(
-    std::mem::align_of::<usize>() == std::mem::align_of::<SafeId<'_>>(),
+    align_of::<usize>() == align_of::<SafeId<'_>>(),
     "Id alignment differs from usize"
 );
 const _: () = assert!(
-    std::mem::size_of::<usize>() == std::mem::size_of::<SafeId<'_>>(),
+    size_of::<usize>() == size_of::<SafeId<'_>>(),
     "Id size differs from usize"
 );
 
@@ -272,6 +295,22 @@ impl<'id, 'g, T> SafeGraph<'id, 'g, T> {
         } else {
             None
         }
+    }
+
+    /// Get the predecessors of a node.
+    pub fn predecessors(&mut self, node: SafeId<'id>) -> &[SafeId<'id>] {
+        let node = self.get(node);
+        // SAFETY: Id and SafeId have the same size and alignment and both only contain a single
+        // usize. Transmuting an Id to an Id that has a phantom lifetime associated with it is
+        // safe.
+        unsafe { std::mem::transmute(node.entry_nodes()) }
+    }
+    
+    /// Get the successors of a node.
+    pub fn successors(&mut self, node: SafeId<'id>) -> &[SafeId<'id>] {
+        let node = self.get(node);
+        // SAFETY: See safety comment in predecessors.
+        unsafe { std::mem::transmute(node.exit_nodes()) }
     }
 }
 
