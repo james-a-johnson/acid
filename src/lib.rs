@@ -6,6 +6,9 @@
 
 //! Simple graph library
 
+pub mod dom;
+
+use std::collections::HashSet;
 use std::marker::PhantomData;
 
 /// Directed graph where each node holds a `T`.
@@ -132,6 +135,33 @@ impl<T> Graph<T> {
             n.entry.push(start);
         }
         Ok(())
+    }
+    
+    pub fn postorder_dfs_ids(&self) -> Vec<Id> {
+        let mut visited = HashSet::new();
+        visited.insert(self.entry_id());
+        let mut order = Vec::with_capacity(self.nodes.len());
+        // SAFETY: Entry node will always be valid so calling this method is safe.
+        unsafe { self.postorder_helper(&mut order, &mut visited, self.entry_id()); }
+        order.push(self.entry_id());
+        order
+        
+    }
+    
+    /// # Safety
+    /// This method requires that `curr` be a valid id for this graph.
+    unsafe fn postorder_helper(&self, order: &mut Vec<Id>, visited: &mut HashSet<Id>, curr: Id) {
+        debug_assert!(curr.0 < self.nodes.len(), "Invalid Id passed to postorder helper");
+        let node = unsafe { self.nodes.get_unchecked(curr.0) };
+        for succ in &node.exit {
+            if !visited.contains(succ) {
+                visited.insert(*succ);
+                // SAFETY: succ is from a valid node in this graph so all of its exit nodes are
+                // valid nodes for this graph.
+                unsafe { self.postorder_helper(order, visited, *succ); }
+                order.push(*succ);
+            }
+        }
     }
 }
 
