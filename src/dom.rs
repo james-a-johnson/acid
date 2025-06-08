@@ -1,5 +1,6 @@
 //! Support for finding the dominators of nodes in a graph.
 
+use std::io::{BufWriter, Write};
 use crate::{Graph, Node, Id};
 
 /// [`Graph`] that contains extra information about what nodes dominate other nodes.
@@ -16,30 +17,47 @@ pub struct Dominator<T> {
 }
 
 impl<T> Dominator<T> {
-    pub fn new(graph: Graph<T>) -> Result<Dominator<T>, Graph<T>> {
+    /// Create a new dominator graph from the given [`Graph`].
+    ///
+    /// # Panics
+    /// This constructor will panic if there are `usize::MAX` nodes in the graph.
+    pub fn new(graph: Graph<T>) -> Dominator<T> {
         const INVALID: Id = Id(usize::MAX);
         // Creation of the dominator struct is mostly taken from
         // https://github.com/baziotis/compiler-optimization/blob/master/dominance/dtree.h
-        if graph.nodes.len() < 2 && graph.nodes.len() < usize::MAX {
-            return Err(graph);
+        if graph.nodes.len() == 0 {
+            return Self {
+                nodes: graph.nodes.into_boxed_slice(),
+                idoms: Vec::new().into_boxed_slice(),
+            };
+        }
+        if graph.nodes.len() == 1 {
+            return Self {
+                nodes: graph.nodes.into_boxed_slice(),
+                idoms: vec![Id(0)].into_boxed_slice(),
+            };
+        }
+        if graph.nodes.len() == usize::MAX {
+            panic!("Invalid number of nodes");
         }
         let mut idoms: Box<[Id]> = unsafe {
-            let mut data = Vec::with_capacity(graph.nodes.len());
-            data.set_len(graph.nodes.len());
-            data.into_boxed_slice()
+            let mut dom_slice = Vec::with_capacity(graph.nodes.len());
+            dom_slice.set_len(graph.nodes.len());
+            dom_slice.into_boxed_slice()
         };
         idoms.fill(INVALID);
         // Entry node is always the first node and the entry has itself as the immediate dominator
         idoms[0] = Id(0);
         let postorder = graph.postorder_dfs_ids();
-        debug_assert!(!postorder.is_empty(), "Postorder was returned as empty somehow");
+        debug_assert!(!postorder.is_empty(), "Postorder is empty");
 
+        // This is an array of basic block index to the order it will be traversed in a post order dfs traversal
         let postorder_map: Box<[usize]> = unsafe {
-            let mut data = Vec::with_capacity(postorder.len());
-            data.set_len(postorder.len());
-            let mut data = data.into_boxed_slice();
-            for i in 0..data.len() {
-                data[postorder[i].0] = i;
+            let mut map = Vec::with_capacity(postorder.len());
+            map.set_len(postorder.len());
+            let mut data = map.into_boxed_slice();
+            for (i, n) in postorder.iter().enumerate() {
+                data[n.0] = i;
             }
             data
         };
@@ -66,14 +84,19 @@ impl<T> Dominator<T> {
             if !changed { break; }
         }
         
-        Ok(Self {
+        Self {
             nodes: graph.nodes.into_boxed_slice(),
             idoms,
-        })
+        }
     }
     
     pub fn idom(&self, node: Id) -> Option<Id> {
         self.idoms.get(node.0).map(|id| *id)
+    }
+
+    /// Convert dominator graph back into the [`Graph`] that it came from.
+    pub fn into_graph(self) -> Graph<T> {
+        Graph { nodes: self.nodes.into_vec() }
     }
     
     /// Checks if `node1` dominates `node2`.
@@ -84,6 +107,30 @@ impl<T> Dominator<T> {
             if dom == Id(0) { return false; }
             dom = self.idoms[dom.0];
         }
+    }
+}
+
+#[cfg(feature = "viz")]
+impl<T: std::fmt::Display> Dominator<T> {
+    pub fn dot_viz(&self, file: impl Write, name: &str) -> std::io::Result<()> {
+        let mut writer = BufWriter::new(file);
+
+        writeln!(writer, "digraph {} {{", name)?;
+        writeln!(writer, "\t{};", self.nodes[0].val)?;
+        for i in 1..self.idoms.len() {
+            let node = &self.nodes[i];
+            let idom = &self.nodes[self.idoms[i].0];
+            writeln!(writer, "\t{} -> {};", idom.val, node.val)?;
+        }
+        writeln!(writer, "}}")?;
+        writer.flush()?;
+        Ok(())
+    }
+}
+
+impl<T> From<Graph<T>> for Dominator<T> {
+    fn from(graph: Graph<T>) -> Self {
+        Self::new(graph)
     }
 }
 
@@ -125,7 +172,7 @@ mod tests {
         let three = g.get(one).unwrap().exit[1];
         let four = g.get(two).unwrap().exit[0];
         
-        let dom = Dominator::new(g).map_err(|_| "Dominator creation failed").unwrap();
+        let dom = Dominator::new(g);
         assert_eq!(dom.idom(entry), Some(entry));
         assert_eq!(dom.idom(one), Some(entry));
         assert_eq!(dom.idom(two), Some(one));

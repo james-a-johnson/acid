@@ -1,5 +1,6 @@
 use acid::Graph;
 use std::fs::File;
+use acid::dom::Dominator;
 
 fn main() -> std::io::Result<()> {
     let mut g = Graph::new("main");
@@ -24,6 +25,10 @@ fn main() -> std::io::Result<()> {
     
     let viz = File::create("/home/jaj/Documents/acid/viz_test.dot")?;
     g.dot_viz(viz, "cfg")?;
+    
+    let d: Dominator<&'static str> = g.into();
+    let dviz = File::create("/home/jaj/Documents/acid/dviz_test.dot")?;
+    d.dot_viz(dviz, "doms")?;
     
     Ok(())
 }

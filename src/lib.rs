@@ -167,6 +167,14 @@ impl<T> Graph<T> {
 
 #[cfg(feature = "viz")]
 impl<T: std::fmt::Display> Graph<T> {
+    /// Write the graph to a file in graphviz format.
+    /// 
+    /// # Params
+    /// - `file` Where to write the file to
+    /// - `name` Name of the graph
+    /// 
+    /// # Errors
+    /// Returns an error if any of the writes fail.
     pub fn dot_viz<W: std::io::Write>(&self, file: W, name: &str) -> std::io::Result<()> {
         use std::io::BufWriter;
         use std::io::Write;
