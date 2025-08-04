@@ -1,6 +1,5 @@
 use acid::Graph;
 use std::fs::File;
-use acid::dom::Dominator;
 
 fn main() -> std::io::Result<()> {
     let mut g = Graph::new("main");
@@ -12,7 +11,7 @@ fn main() -> std::io::Result<()> {
     let make_string = g.add("make_string");
     let compare = g.add("compare");
     let printf = g.add("printf");
-    
+
     g.create_edge(main, init).unwrap();
     g.create_edge(main, cleanup).unwrap();
     g.create_edge(main, parse).unwrap();
@@ -22,13 +21,9 @@ fn main() -> std::io::Result<()> {
     g.create_edge(exec, make_string).unwrap();
     g.create_edge(exec, compare).unwrap();
     g.create_edge(exec, printf).unwrap();
-    
+
     let viz = File::create("/home/jaj/Documents/acid/viz_test.dot")?;
     g.dot_viz(viz, "cfg")?;
-    
-    let d: Dominator<&'static str> = g.into();
-    let dviz = File::create("/home/jaj/Documents/acid/dviz_test.dot")?;
-    d.dot_viz(dviz, "doms")?;
-    
+
     Ok(())
 }

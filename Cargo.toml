@@ -7,7 +7,3 @@ edition = "2024"
 
 [[bin]]
 name = "graph_viz"
-required-features = ["viz"]
-
-[features]
-viz = []

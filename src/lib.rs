@@ -6,9 +6,8 @@
 
 //! Simple graph library
 
-pub mod dom;
-
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
+use std::iter::FusedIterator;
 use std::marker::PhantomData;
 
 /// Directed graph where each node holds a `T`.
@@ -29,6 +28,13 @@ pub struct Node<T> {
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct Id(usize);
+
+impl Id {
+    #[inline(always)]
+    pub unsafe fn create(idx: usize) -> Self {
+        Self(idx)
+    }
+}
 
 const _: () = assert!(size_of::<Id>() == size_of::<usize>());
 const _: () = assert!(align_of::<Id>() == size_of::<usize>());
@@ -56,7 +62,12 @@ impl<T> Graph<T> {
             nodes: vec![entry.into()],
         }
     }
-    
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
     /// Get the Id of the entry node.
     pub fn entry_id(&self) -> Id {
         Id(0)
@@ -136,59 +147,142 @@ impl<T> Graph<T> {
         }
         Ok(())
     }
-    
-    pub fn postorder_dfs_ids(&self) -> Vec<Id> {
-        let mut visited = HashSet::new();
-        visited.insert(self.entry_id());
-        let mut order = Vec::with_capacity(self.nodes.len());
-        // SAFETY: Entry node will always be valid so calling this method is safe.
-        unsafe { self.postorder_helper(&mut order, &mut visited, self.entry_id()); }
-        order.push(self.entry_id());
-        order
-        
-    }
-    
-    /// # Safety
-    /// This method requires that `curr` be a valid id for this graph.
-    unsafe fn postorder_helper(&self, order: &mut Vec<Id>, visited: &mut HashSet<Id>, curr: Id) {
-        debug_assert!(curr.0 < self.nodes.len(), "Invalid Id passed to postorder helper");
-        let node = unsafe { self.nodes.get_unchecked(curr.0) };
-        for succ in &node.exit {
-            if !visited.contains(succ) {
-                visited.insert(*succ);
-                // SAFETY: succ is from a valid node in this graph so all of its exit nodes are
-                // valid nodes for this graph.
-                unsafe { self.postorder_helper(order, visited, *succ); }
-                order.push(*succ);
+}
+
+impl<T: Eq> Graph<T> {
+    #[inline]
+    pub fn find(&self, value: &T) -> Option<Id> {
+        for i in 0..self.nodes.len() {
+            if self.nodes[i].val == *value {
+                return Some(Id(i));
             }
+        }
+        None
+    }
+
+    pub fn find_or_insert(&mut self, value: T) -> Id {
+        if let Some(n) = self.find(&value) {
+            n
+        } else {
+            self.add(value)
         }
     }
 }
 
-#[cfg(feature = "viz")]
+pub struct BreadthFirst<'g, T> {
+    graph: &'g Graph<T>,
+    visited: HashSet<Id>,
+    queue: VecDeque<Id>,
+}
+
+impl<'g, T> BreadthFirst<'g, T> {
+    pub fn new(graph: &'g Graph<T>) -> Self {
+        let mut visited = HashSet::new();
+        visited.insert(graph.entry_id());
+        let mut queue = VecDeque::new();
+        queue.push_back(graph.entry_id());
+        Self {
+            graph,
+            visited,
+            queue,
+        }
+    }
+}
+
+impl<'g, T> Iterator for BreadthFirst<'g, T> {
+    type Item = &'g Node<T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(n) = self.queue.pop_front() {
+            // Get next node to visit and then add all children to queue
+            for succ in self.graph.get(n).unwrap().exit.iter() {
+                if !self.visited.contains(succ) {
+                    self.queue.push_back(*succ);
+                }
+            }
+            Some(self.graph.get(n).unwrap())
+        } else {
+            None
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let size = self.graph.nodes.len() - self.visited.len();
+        (size - 1, Some(size))
+    }
+}
+
+impl<'g, T> FusedIterator for BreadthFirst<'g, T> {}
+
+pub struct DepthFirst<'g, T> {
+    graph: &'g Graph<T>,
+    visited: HashSet<Id>,
+    queue: Vec<Id>,
+}
+
+impl<'g, T> DepthFirst<'g, T> {
+    pub fn new(graph: &'g Graph<T>) -> Self {
+        let mut visited = HashSet::new();
+        visited.insert(graph.entry_id());
+        let mut queue = Vec::new();
+        queue.push(graph.entry_id());
+        Self {
+            graph,
+            visited,
+            queue,
+        }
+    }
+}
+
+impl<'g, T> Iterator for DepthFirst<'g, T> {
+    type Item = &'g Node<T>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(n) = self.queue.pop() {
+            for succ in self.graph.get(n).unwrap().exit.iter() {
+                if !self.visited.contains(succ) {
+                    self.queue.push(*succ);
+                }
+            }
+            Some(self.graph.get(n).unwrap())
+        } else {
+            None
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let size = self.graph.nodes.len() - self.visited.len();
+        (size - 1, Some(size))
+    }
+}
+
+impl<'g, T> FusedIterator for DepthFirst<'g, T> {}
+
 impl<T: std::fmt::Display> Graph<T> {
     /// Write the graph to a file in graphviz format.
-    /// 
+    ///
     /// # Params
     /// - `file` Where to write the file to
     /// - `name` Name of the graph
-    /// 
+    ///
     /// # Errors
     /// Returns an error if any of the writes fail.
     pub fn dot_viz<W: std::io::Write>(&self, file: W, name: &str) -> std::io::Result<()> {
         use std::io::BufWriter;
         use std::io::Write;
-        
+
         let mut writer = BufWriter::new(file);
-        
+
         writeln!(writer, "digraph {} {{", name)?;
         for n in self.nodes.iter() {
             for succ in n.exit.iter() {
-                writeln!(writer, "\t{} -> {};", n.val, unsafe { &self.nodes.get_unchecked(succ.0).val })?;
+                writeln!(writer, "\t{} -> {};", n.val, unsafe {
+                    &self.nodes.get_unchecked(succ.0).val
+                })?;
             }
         }
         writeln!(writer, "}}")?;
-        
+
         Ok(())
     }
 }
@@ -343,7 +437,7 @@ impl<'id, 'g, T> SafeGraph<'id, 'g, T> {
         // safe.
         unsafe { std::mem::transmute(node.entry_nodes()) }
     }
-    
+
     /// Get the successors of a node.
     pub fn successors(&mut self, node: SafeId<'id>) -> &[SafeId<'id>] {
         let node = self.get(node);
@@ -370,8 +464,10 @@ mod test {
         let mut g = Graph::new(0u32);
         let one = g.add(1);
         let two = g.add(2);
-        g.create_edge(g.entry_id(), one).expect("Failed to create valid edge");
-        g.create_edge(g.entry_id(), two).expect("Failed to create valid edge");
+        g.create_edge(g.entry_id(), one)
+            .expect("Failed to create valid edge");
+        g.create_edge(g.entry_id(), two)
+            .expect("Failed to create valid edge");
 
         let e1 = g.create_edge(Id(100), two);
         assert_eq!(e1, Err(Id(100)));
@@ -405,8 +501,8 @@ mod test {
     //     let mut g2 = Graph::new('b');
     //     g1.update(|mut sg1| {
     //         g2.update(|mut sg2| {
-    //             let entry2 = g2.entry();
-    //             let node = g1.get(entry2);
+    //             let entry2 = sg2.entry();
+    //             let node = sg1.get(entry2);
     //         })
     //     })
     // }
