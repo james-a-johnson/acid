@@ -147,6 +147,33 @@ impl<T> Graph<T> {
         }
         Ok(())
     }
+
+    /// Get the postorder traversal of the graph.
+    ///
+    /// This just creates a vector that is the list of node Id's in postorder traversal order.
+    ///
+    /// Algorithm used comes from [Eli Bendersky](https://eli.thegreenplace.net/2015/directed-graph-traversal-orderings-and-applications-to-data-flow-analysis/)
+    pub fn postorder(&self) -> Vec<Id> {
+        let mut order = Vec::with_capacity(self.nodes.len());
+        let mut visited = HashSet::<Id>::new();
+        self.postorder_helper(&mut order, &mut visited, self.entry_id());
+        order
+    }
+
+    /// Helper for doing postorder traversal. This is the recursive function that will be called. Makes the
+    /// implementation quite simple.
+    fn postorder_helper(&self, order: &mut Vec<Id>, visited: &mut HashSet<Id>, curr_node: Id) {
+        visited.insert(curr_node);
+        let node = self
+            .get(curr_node)
+            .expect("This must be valid since graph does not allow removal");
+        for succ in &node.exit {
+            if !visited.contains(succ) {
+                self.postorder_helper(order, visited, *succ);
+            }
+        }
+        order.push(curr_node);
+    }
 }
 
 impl<T: Eq> Graph<T> {
@@ -492,6 +519,32 @@ mod test {
         });
         let vals = g.nodes.iter().map(|n| *n.val()).collect::<Vec<u32>>();
         assert_eq!(vals.as_slice(), &[0, 2, 3, 4]);
+    }
+
+    #[test]
+    fn postorder() {
+        let mut g = Graph::new('A');
+        g.update(|mut sg| {
+            let a = sg.entry();
+            let t = sg.add('T');
+            let c = sg.add('C');
+            let b = sg.add('B');
+            let e = sg.add('E');
+            let d = sg.add('D');
+
+            sg.create_edge(a, t);
+            sg.create_edge(a, b);
+            sg.create_edge(a, c);
+            sg.create_edge(t, b);
+            sg.create_edge(c, b);
+            sg.create_edge(c, e);
+            sg.create_edge(b, d);
+            sg.create_edge(e, d);
+        });
+
+        let order = g.postorder();
+        let letters: Vec<char> = order.into_iter().map(|i| g.get(i).unwrap().val).collect();
+        assert_eq!(&letters, &['D', 'B', 'T', 'E', 'C', 'A']);
     }
 
     // This test is included so that it can be uncommented every once in a while to make sure it does not
