@@ -333,7 +333,8 @@ pub struct SafeGraph<'id, 'g, T> {
 ///
 /// Using it as an index into a graph is guaranteed to be a safe unchecked access if using it
 /// compiles.
-#[derive(Clone, Copy)]
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SafeId<'id> {
     idx: usize,
     _brand: Brand<'id>,
