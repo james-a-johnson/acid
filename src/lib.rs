@@ -6,6 +6,8 @@
 
 //! Simple graph library
 
+pub mod dom;
+
 use std::collections::{HashSet, VecDeque};
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
@@ -30,10 +32,11 @@ pub struct Node<T> {
 pub struct Id(usize);
 
 impl Id {
-    #[inline(always)]
-    pub unsafe fn create(idx: usize) -> Self {
-        Self(idx)
-    }
+    /// Id of the entry node of a graph.
+    ///
+    /// This is guaranteed to be valid for any [`Graph`].
+    pub const ENTRY: Self = Self(0);
+    pub const INVALID: Self = Self(usize::MAX);
 }
 
 const _: () = assert!(size_of::<Id>() == size_of::<usize>());
@@ -55,6 +58,7 @@ impl<T> From<T> for Node<T> {
     }
 }
 
+#[allow(clippy::len_without_is_empty)]
 impl<T> Graph<T> {
     /// Create a new graph with `entry` as the entry node of the graph.
     pub fn new(entry: T) -> Self {
@@ -251,8 +255,7 @@ impl<'g, T> DepthFirst<'g, T> {
     pub fn new(graph: &'g Graph<T>) -> Self {
         let mut visited = HashSet::new();
         visited.insert(graph.entry_id());
-        let mut queue = Vec::new();
-        queue.push(graph.entry_id());
+        let queue = vec![graph.entry_id()];
         Self {
             graph,
             visited,
@@ -300,7 +303,7 @@ impl<T: std::fmt::Display> Graph<T> {
 
         let mut writer = BufWriter::new(file);
 
-        writeln!(writer, "digraph {} {{", name)?;
+        writeln!(writer, "digraph {name} {{")?;
         for n in self.nodes.iter() {
             for succ in n.exit.iter() {
                 writeln!(writer, "\t{} -> {};", n.val, unsafe {
@@ -449,9 +452,9 @@ impl<'id, 'g, T> SafeGraph<'id, 'g, T> {
     /// Convert an id of a node into an [`SafeId`].
     ///
     /// Checks if the id is in this graph and returns the safe Id if possible or returns None otherwise.
-    pub fn safe_index(&mut self, idx: usize) -> Option<SafeId<'id>> {
-        if idx < self.nodes.len() {
-            Some(SafeId::new(idx))
+    pub fn safe_index(&mut self, idx: Id) -> Option<SafeId<'id>> {
+        if idx.0 < self.nodes.len() {
+            Some(SafeId::new(idx.0))
         } else {
             None
         }
@@ -514,7 +517,7 @@ mod test {
             sg.create_edge(two, three);
             sg.create_edge(three, four);
 
-            let invalid = sg.safe_index(1000);
+            let invalid = sg.safe_index(Id(1000));
             assert!(invalid.is_none(), "Invalid index turned into an Id");
         });
         let vals = g.nodes.iter().map(|n| *n.val()).collect::<Vec<u32>>();
